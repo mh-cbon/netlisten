@@ -21,5 +21,5 @@ sleep 1;pkill listen
 # Install
 
 ```sh
-go get gothub.com/mh-cbon/netlisten
+go get github.com/mh-cbon/netlisten
 ```
