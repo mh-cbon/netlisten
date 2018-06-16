@@ -17,6 +17,10 @@ func main() {
 
 	args := flag.Args()
 
+	if len(args) < 1 {
+		log.Fatal("invalid command line, expected: netlisten [addr] to [dst]")
+	}
+
 	srcAddr := args[0]
 	dstAddr := "-"
 	if len(args) > 2 {
