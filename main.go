@@ -1,18 +1,34 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	stdlog "log"
 	"net"
 	"os"
 	"os/signal"
 	"strings"
 	"sync"
+	"time"
+)
+
+var (
+	log = logAPI{}
 )
 
 func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var opts = struct {
+		timeout   time.Duration
+		maxAccept int
+	}{}
+
+	flag.DurationVar(&opts.timeout, "t", time.Second*2, "timeout of the conenction")
+	flag.IntVar(&opts.maxAccept, "k", 0, "kill after that many connections")
 	flag.Parse()
 
 	args := flag.Args()
@@ -31,7 +47,7 @@ func main() {
 	{
 		x, err := write(dstAddr)
 		if err != nil {
-			log.Fatalf("failed to open %q, err=%v", dstAddr, err)
+			log.Fatal("failed to open %q, err=%v", dstAddr, err)
 		}
 		if y, ok := x.(io.Closer); ok {
 			defer y.Close()
@@ -43,7 +59,7 @@ func main() {
 	{
 		x, err := listen(srcAddr)
 		if err != nil {
-			log.Fatalf("failed to listen %q, err=%v", srcAddr, err)
+			log.Fatal("failed to listen %q, err=%v", srcAddr, err)
 		}
 		defer x.Close()
 		listener = x
@@ -51,18 +67,19 @@ func main() {
 
 	var wg sync.WaitGroup
 	{
-		accept(&wg, listener, func(s net.Conn) {
+		accept(ctx, &wg, opts.maxAccept, listener, func(s net.Conn) {
 			sname := fmt.Sprintf("%v copy from %v to %v", listener.Addr(), s.RemoteAddr(), dstAddr)
+			s = &idleTimeoutConn{Conn: s, timeout: opts.timeout}
 			copy(dst, s, sname)
 		})
 	}
 
-	waitOrCancel(&wg)
+	waitOrCancel(ctx, &wg)
 }
 
-func waitOrCancel(wg *sync.WaitGroup) {
+func waitOrCancel(ctx context.Context, wg *sync.WaitGroup) {
 	sig := make(chan os.Signal, 10)
-	signal.Notify(sig)
+	signal.Notify(sig, os.Interrupt, os.Kill)
 
 	wait := make(chan struct{})
 	go func() {
@@ -71,33 +88,52 @@ func waitOrCancel(wg *sync.WaitGroup) {
 	}()
 
 	select {
+	case <-ctx.Done():
 	case <-sig:
 	case <-wait:
 	}
 }
 
-func accept(wg *sync.WaitGroup, l net.Listener, handle func(net.Conn)) {
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			log.Printf("accept err=%v\n", err)
-			break
+func accept(ctx context.Context, wg *sync.WaitGroup, max int, l net.Listener, handle func(net.Conn)) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var accepted int
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			if max > 0 && accepted >= max {
+				return
+			}
+			conn, err := l.Accept()
+			if err != nil {
+				log.Print("accept err=%v\n", err)
+				continue
+			}
+			if max > 0 && accepted >= max {
+				return
+			}
+			accepted++
+			log.Print("%v accepted %v\n", l.Addr(), conn.RemoteAddr())
+			wg.Add(1)
+			go func() {
+				defer conn.Close()
+				handle(conn)
+				wg.Done()
+			}()
 		}
-		log.Printf("%v accepted %v\n", l.Addr(), conn.RemoteAddr())
-		wg.Add(1)
-		go func() {
-			handle(conn)
-			wg.Done()
-		}()
-	}
+	}()
 }
 
 func copy(dst io.Writer, src io.ReadCloser, name string) {
 	defer src.Close()
 	n, err := io.Copy(dst, src)
-	log.Printf("%q copied %v bytes\n", name, n)
+	log.Print("%q copied %v bytes\n", name, n)
 	if err != nil {
-		log.Fatalf("%q failed to copy, err=%v", name, err)
+		log.Error("%q failed to copy, err=%v", name, err)
 	}
 }
 
@@ -169,3 +205,57 @@ type noCloser struct {
 }
 
 func (n *noCloser) Close() error { return nil }
+
+type idleTimeoutConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (i idleTimeoutConn) Read(buf []byte) (n int, err error) {
+	i.Conn.SetDeadline(time.Now().Add(i.timeout))
+	n, err = i.Conn.Read(buf)
+	i.Conn.SetDeadline(time.Now().Add(i.timeout))
+	return
+}
+
+func (i idleTimeoutConn) Write(buf []byte) (n int, err error) {
+	i.Conn.SetDeadline(time.Now().Add(i.timeout))
+	n, err = i.Conn.Write(buf)
+	i.Conn.SetDeadline(time.Now().Add(i.timeout))
+	return
+}
+
+type logAPI struct {
+	stfu bool
+}
+
+func (l *logAPI) SetQuiet(stfu bool) {
+	l.stfu = stfu
+}
+
+func (l logAPI) Print(f string, args ...interface{}) {
+	if l.stfu {
+		return
+	}
+	if len(args) == 0 {
+		stdlog.Print(f + "\n")
+	} else {
+		stdlog.Printf(f+"\n", args...)
+	}
+}
+
+func (l logAPI) Fatal(f string, args ...interface{}) {
+	if len(args) == 0 {
+		stdlog.Fatalf(f + "\n")
+	} else {
+		stdlog.Fatalf(f+"\n", args...)
+	}
+}
+
+func (l logAPI) Error(f string, args ...interface{}) {
+	if len(args) == 0 {
+		stdlog.Print(f + "\n")
+	} else {
+		stdlog.Printf(f+"\n", args...)
+	}
+}
