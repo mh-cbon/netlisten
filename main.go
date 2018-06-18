@@ -27,7 +27,7 @@ func main() {
 		maxAccept int
 	}{}
 
-	flag.DurationVar(&opts.timeout, "t", time.Second*2, "timeout of the conenction")
+	flag.DurationVar(&opts.timeout, "t", time.Second*60, "timeout of the conenction")
 	flag.IntVar(&opts.maxAccept, "k", 0, "kill after that many connections")
 	flag.Parse()
 
@@ -214,14 +214,14 @@ type idleTimeoutConn struct {
 func (i idleTimeoutConn) Read(buf []byte) (n int, err error) {
 	i.Conn.SetDeadline(time.Now().Add(i.timeout))
 	n, err = i.Conn.Read(buf)
-	i.Conn.SetDeadline(time.Now().Add(i.timeout))
+	// i.Conn.SetDeadline(time.Now().Add(i.timeout))
 	return
 }
 
 func (i idleTimeoutConn) Write(buf []byte) (n int, err error) {
 	i.Conn.SetDeadline(time.Now().Add(i.timeout))
 	n, err = i.Conn.Write(buf)
-	i.Conn.SetDeadline(time.Now().Add(i.timeout))
+	// i.Conn.SetDeadline(time.Now().Add(i.timeout))
 	return
 }
 
