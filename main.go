@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "expvar"
 	"flag"
+	"fmt"
 	"io"
 	stdlog "log"
 	"net"
@@ -19,7 +20,7 @@ import (
 )
 
 var (
-	log = logAPI{}
+	log = logAPI{prefix: "[netlisten] "}
 )
 
 func main() {
@@ -37,6 +38,8 @@ func main() {
 	flag.StringVar(&opts.monitor, "monitor", ":", "http monitor address")
 
 	flag.Parse()
+
+	log.prefix = fmt.Sprintf("[netlisten %v] ", opts.monitor)
 
 	go func() {
 		if err := http.ListenAndServe(opts.monitor, nil); err != nil {
@@ -265,7 +268,8 @@ func (i idleTimeoutConn) Write(buf []byte) (n int, err error) {
 }
 
 type logAPI struct {
-	stfu bool
+	stfu   bool
+	prefix string
 }
 
 func (l *logAPI) SetQuiet(stfu bool) {
@@ -277,24 +281,24 @@ func (l logAPI) Print(f string, args ...interface{}) {
 		return
 	}
 	if len(args) == 0 {
-		stdlog.Print(f + "\n")
+		stdlog.Print(l.prefix + f + "\n")
 	} else {
-		stdlog.Printf(f+"\n", args...)
+		stdlog.Printf(l.prefix+f+"\n", args...)
 	}
 }
 
 func (l logAPI) Fatal(f string, args ...interface{}) {
 	if len(args) == 0 {
-		stdlog.Fatalf(f + "\n")
+		stdlog.Fatalf(l.prefix + f + "\n")
 	} else {
-		stdlog.Fatalf(f+"\n", args...)
+		stdlog.Fatalf(l.prefix+f+"\n", args...)
 	}
 }
 
 func (l logAPI) Error(f string, args ...interface{}) {
 	if len(args) == 0 {
-		stdlog.Print(f + "\n")
+		stdlog.Print(l.prefix + f + "\n")
 	} else {
-		stdlog.Printf(f+"\n", args...)
+		stdlog.Printf(l.prefix+f+"\n", args...)
 	}
 }
