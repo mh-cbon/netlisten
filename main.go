@@ -57,12 +57,12 @@ func main() {
 	srcAddr := args[0]
 	dstAddr := "-"
 	if len(args) > 1 {
-		dstAddr = args[1]
+		dstAddr = args[2]
 	}
 
 	capBytes := uint64(float64(1024*20) * delta)
-	if len(args) > 2 {
-		b, err := bytefmt.ToBytes(args[2])
+	if len(args) > 3 {
+		b, err := bytefmt.ToBytes(args[3])
 		if err != nil {
 			log.Fatal("failed to parse capacity %q, err=%v", args[3], err)
 		}
@@ -108,8 +108,13 @@ func main() {
 			}
 			elapsed := time.Since(start)
 			copied := bytefmt.ByteSize(uint64(n))
-			speed := bytefmt.ByteSize(uint64(n / int64(elapsed.Seconds())))
-			log.Print("%v -> %v copied %v - %v - %v/s",
+			speed := "n/a"
+			if x := int64(elapsed.Seconds()); x > 0 {
+				speed = bytefmt.ByteSize(uint64(n/x)) + "/s"
+			} else if x := int64(elapsed.Nanoseconds()); x > 0 {
+				speed = bytefmt.ByteSize(uint64(n/x)) + "/µs"
+			}
+			log.Print("%v -> %v copied %v - %v - %v",
 				src.RemoteAddr(), dstAddr,
 				copied, elapsed, speed,
 			)
