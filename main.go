@@ -2,16 +2,20 @@ package main
 
 import (
 	"context"
+	_ "expvar"
 	"flag"
-	"fmt"
 	"io"
 	stdlog "log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"sync"
 	"time"
+
+	"code.cloudfoundry.org/bytefmt"
+	"github.com/oxtoacart/bpool"
 )
 
 var (
@@ -24,23 +28,42 @@ func main() {
 
 	var opts = struct {
 		timeout   time.Duration
+		monitor   string
 		maxAccept int
 	}{}
 
 	flag.DurationVar(&opts.timeout, "t", time.Second*60, "timeout of the conenction")
 	flag.IntVar(&opts.maxAccept, "k", 0, "kill after that many connections")
+	flag.StringVar(&opts.monitor, "monitor", ":", "http monitor address")
+
 	flag.Parse()
 
+	go func() {
+		if err := http.ListenAndServe(opts.monitor, nil); err != nil {
+			log.Fatal("monitoring server could not listen, err=%v", err)
+		}
+	}()
+
 	args := flag.Args()
+	delta := 1.2
 
 	if len(args) < 1 {
-		log.Fatal("invalid command line, expected: netlisten [addr] to [dst]")
+		log.Fatal("invalid command line, expected: netlisten [addr] to [dst] [cap]")
 	}
 
 	srcAddr := args[0]
 	dstAddr := "-"
+	if len(args) > 1 {
+		dstAddr = args[1]
+	}
+
+	capBytes := uint64(float64(1024*20) * delta)
 	if len(args) > 2 {
-		dstAddr = args[2]
+		b, err := bytefmt.ToBytes(args[2])
+		if err != nil {
+			log.Fatal("failed to parse capacity %q, err=%v", args[3], err)
+		}
+		capBytes = uint64(float64(b) * delta)
 	}
 
 	var dst io.Writer
@@ -67,10 +90,26 @@ func main() {
 
 	var wg sync.WaitGroup
 	{
-		accept(ctx, &wg, opts.maxAccept, listener, func(s net.Conn) {
-			sname := fmt.Sprintf("%v copy from %v to %v", listener.Addr(), s.RemoteAddr(), dstAddr)
-			s = &idleTimeoutConn{Conn: s, timeout: opts.timeout}
-			copy(dst, s, sname)
+		bufpool := bpool.NewBytePool(48, int(float64(capBytes)*delta))
+		accept(ctx, &wg, opts.maxAccept, listener, func(src net.Conn) {
+			src = &idleTimeoutConn{Conn: src, timeout: opts.timeout}
+			start := time.Now()
+			buf := bufpool.Get()
+			defer bufpool.Put(buf)
+			n, err := io.CopyBuffer(dst, src, buf)
+			if err != nil {
+				log.Print("[ERR] %v -> %v %v",
+					src.RemoteAddr(), dstAddr, err,
+				)
+				return
+			}
+			elapsed := time.Since(start)
+			copied := bytefmt.ByteSize(uint64(n))
+			speed := bytefmt.ByteSize(uint64(n / int64(elapsed.Seconds())))
+			log.Print("%v -> %v copied %v - %v - %v/s",
+				src.RemoteAddr(), dstAddr,
+				copied, elapsed, speed,
+			)
 		})
 	}
 
